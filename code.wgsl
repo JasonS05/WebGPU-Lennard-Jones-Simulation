@@ -1,29 +1,26 @@
 struct Particle {
 	position: vec2f,
 	velocity: vec2f,
-	oldForce: vec2f,
-	potential: f32
+	acceleration: vec2f,
+	potential: f32,
+	radius: f32
 }
 
-fn equal(p1: Particle, p2: Particle) -> bool {
-	return
-		p1.position.x == p2.position.x &&
-		p1.position.y == p2.position.y &&
-		p1.velocity.x == p2.velocity.x &&
-		p1.velocity.y == p2.velocity.y &&
-		p1.oldForce.x == p2.oldForce.x &&
-		p1.oldForce.y == p2.oldForce.y &&
-		p1.potential == p2.potential;
+fn equal(a: vec2f, b: vec2f) -> bool {
+	return a.x == b.x && a.y == b.y;
 }
 
 struct miscData {
 	maximumTimeStep: f32,
-	inverseTimeStep: atomic<u32>
+	inverseTimeStep: atomic<u32>,
+	nextMaximumTimeStep: f32,
+	time: f32
 }
 
 // values with [[...]] are supplied by JS using textual substitution
 const numParticles: u32 = [[numParticles]];
-const particleRadius: f32 = [[particleRadius]];
+const maxParticleRadius: f32 = [[maxParticleRadius]];
+const minParticleRadius: f32 = [[minParticleRadius]];
 const potentialCutoff: f32 = [[potentialCutoff]];
 const timeStepCaution: f32 = [[timeStepCaution]];
 const gravity: f32 = [[gravity]];
@@ -33,7 +30,7 @@ const gridCellCapacity: u32 = [[gridCellCapacity]];
 const numGridCells: u32 = [[numGridCells]];
 
 const pi = 3.1415926;
-const particleSize = particleRadius / pow(2, 1/6) * 2; // an adjusted version of particleRadius used in calculations
+const particleSizeAdjustment = 1 / pow(2, 1/6) * 2;
 
 @group(0) @binding(0) var<storage, read> input_data: array<Particle>;
 @group(0) @binding(1) var<storage, read> input_grid: array<Particle>;
@@ -56,20 +53,46 @@ const particleSize = particleRadius / pow(2, 1/6) * 2; // an adjusted version of
 	let timeStep = input_misc.maximumTimeStep / f32(atomicLoad(&input_misc.inverseTimeStep));
 
 	var particle = input_data[index];
-	let result = calculateForceAndPotential(particle, timeStep);
+	let mass = 1000 * particle.radius * particle.radius;
+	let result = calculateForceAndPotential(particle, timeStep, mass);
+	var acceleration = result.force / mass + vec2f(0, -gravity);
 
-	particle.velocity += (result.force + particle.oldForce) / 2 * timeStep;
-	particle.position += particle.velocity * timeStep + result.force * timeStep * timeStep / 2;
-	particle.oldForce = result.force;
+	if (input_misc.time < 0.15) {
+		acceleration -= particle.velocity * 10;
+	}
+
+	particle.velocity += (acceleration + particle.acceleration) / 2 * timeStep;
+	particle.position += particle.velocity * timeStep + acceleration * timeStep * timeStep / 2;
+	particle.acceleration = acceleration;
 	particle.potential = result.potential;
+
+	particle.position = modulo(particle.position + 1 - particle.radius, 4 - particle.radius * 4);
+
+	if (particle.position.x > 2 - particle.radius * 2) {
+		particle.position.x = 4 - particle.radius * 4 - particle.position.x;
+		particle.velocity.x *= -1;
+	}
+
+	if (particle.position.y > 2 - particle.radius * 2) {
+		particle.position.y = 4 - particle.radius * 4 - particle.position.y;
+		particle.velocity.y *= -1;
+	}
+
+	particle.position -= 1 - particle.radius;
 
 	output_data[index] = particle;
 	placeParticleInGrid(particle);
 
-	let minimumInverseTimeStep = u32(ceil(timeStepCaution * input_misc.maximumTimeStep * length(particle.velocity) / particleRadius));
+	let minimumInverseTimeStep = u32(1 + floor(timeStepCaution * input_misc.nextMaximumTimeStep * length(particle.velocity) / minParticleRadius));
 
-	output_misc.maximumTimeStep = input_misc.maximumTimeStep;
+	output_misc.maximumTimeStep = input_misc.nextMaximumTimeStep;
 	atomicMax(&output_misc.inverseTimeStep, minimumInverseTimeStep);
+	output_misc.nextMaximumTimeStep = timeStep * 65536;
+	output_misc.time = input_misc.time + timeStep;
+}
+
+fn modulo(dividend: vec2f, divisor: f32) -> vec2f {
+	return dividend - divisor * floor(dividend / divisor);
 }
 
 fn placeParticleInGrid(particle: Particle) {
@@ -88,16 +111,6 @@ fn placeParticleInGrid(particle: Particle) {
 			let overflowOccupancy = atomicAdd(&output_gridCounters[numGridCells], 1);
 			output_grid[overflowOffset + overflowOccupancy] = particle;
 		}
-	} else {
-		let n = particleRadius * 2 * potentialCutoff + 1;
-		let x = particle.position.x;
-		let y = particle.position.y;
-
-		if (x > -n && x < n && y > -n && y < n) {
-			let overflowOffset = numGridCells * gridCellCapacity;
-			let overflowOccupancy = atomicAdd(&output_gridCounters[numGridCells], 1);
-			output_grid[overflowOffset + overflowOccupancy] = particle;
-		}
 	}
 }
 
@@ -106,9 +119,9 @@ struct forceAndPotential {
 	potential: f32
 }
 
-fn calculateForceAndPotential(particle: Particle, timeStep: f32) -> forceAndPotential {
+fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> forceAndPotential {
 	let position = particle.position;
-	var LJforce = vec2f(0, 0);
+	var force = vec2f(0, 0);
 	var potential: f32 = 0;
 
 	let gridCellPosition = vec2i(floor((particle.position + 1) / 2 / gridCellSize));
@@ -123,10 +136,10 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32) -> forceAndPote
 				for (var i: u32 = gridCellOffset; i < gridCellOffset + gridCellOccupancy; i++) {
 					let otherParticle = input_grid[i];
 
-					if (!equal(otherParticle,particle)) {
+					if (!equal(otherParticle.position, particle.position)) {
 						let result = calculateForceAndPotential_helper(particle, otherParticle);
 
-						LJforce += result.force;
+						force += result.force;
 						potential += result.potential;
 					}
 				}
@@ -140,49 +153,28 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32) -> forceAndPote
 	for (var i: u32 = gridCellOverflowOffset; i < gridCellOverflowOffset + gridCellOverflowOccupancy; i++) {
 		let otherParticle = input_grid[i];
 
-		if (!equal(otherParticle, particle)) {
+		if (!equal(otherParticle.position, particle.position)) {
 			let result = calculateForceAndPotential_helper(particle, otherParticle);
 
-			LJforce += result.force;
+			force += result.force;
 			potential += result.potential;
 		}
 	}
 
-	let gravityForce = vec2f(0, -gravity);
-	let gravityPotential = gravity * position.y * 2;
-
-	var wallForce = vec2f(0, 0);
-
-	if (position.x > 1) {
-		wallForce += vec2f(-position.x + 1, 0);
-	}
-
-	if (position.y > 1) {
-		wallForce += vec2f(0, -position.y + 1);
-	}
-
-	if (position.x < -1) {
-		wallForce += vec2f(-position.x - 1, 0);
-	}
-
-	if (position.y < -1) {
-		wallForce += vec2f(0, -position.y - 1);
-	}
-
-	wallForce /= timeStep * timeStep;
-
 	var result: forceAndPotential;
-	result.force = LJforce + wallForce + gravityForce;
-	result.potential = potential + 0 * gravityPotential;
+	result.force = force;
+	result.potential = potential;
 	return result;
 }
 
 fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -> forceAndPotential {
 	let relativePosition = particle2.position - particle1.position;
 	let distance2 = dot(relativePosition, relativePosition);
+	let summedRadii = particle1.radius + particle2.radius;
+	let particleSize = summedRadii * particleSizeAdjustment * 0.5;
 
-	if (distance2 < particleRadius * particleRadius * potentialCutoff * potentialCutoff * 4) {
-		let cutoffDistanceRadii = particleRadius * 2 * potentialCutoff / particleSize;
+	if (distance2 < summedRadii * summedRadii * potentialCutoff * potentialCutoff) {
+		let cutoffDistanceRadii = potentialCutoff * particleSizeAdjustment;
 		let potentialAtCutoff = pow(cutoffDistanceRadii, -12) - pow(cutoffDistanceRadii, -6);
 
 		let iparticleSize = 1 / particleSize;
@@ -208,7 +200,9 @@ struct VertexShaderOutput {
 }
 
 @vertex fn vertexShader(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexShaderOutput {
-	let radius = particleRadius;
+	let particle = input_data[instanceIndex];
+
+	let radius = particle.radius;
 
 	var vertexPosition: vec2f;
 
@@ -225,14 +219,14 @@ struct VertexShaderOutput {
 	}
 
 	var vsOutput: VertexShaderOutput;
-	vsOutput.position = vec4f(input_data[instanceIndex].position + vertexPosition, 0, 1);
+	vsOutput.position = vec4f(particle.position + vertexPosition, 0, 1);
 
 	let red = vec4f(1, 0.5, 0, 1);
 	let blue = vec4f(0, 0.5, 1, 1);
 	let white = vec4f(1, 1, 1, 1);
 
-	let potentialEnergy = input_data[instanceIndex].potential / 2;
-	let velocity = input_data[instanceIndex].velocity;
+	let potentialEnergy = particle.potential / 2;
+	let velocity = particle.velocity;
 	let kineticEnergy = 0.5 * dot(velocity, velocity);
 	var color = 5 * potentialEnergy + 0 * kineticEnergy + 2.5;
 
