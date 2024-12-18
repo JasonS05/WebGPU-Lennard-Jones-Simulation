@@ -7,7 +7,7 @@
 // etc.
 let circleResolution = 3;
 
-let numParticles = Math.round(5800 / 4); // must not be higher than 4194240 (i.e. 65535 * 64);
+let numParticles = Math.round(1000); // must not be higher than 4194240 (i.e. 65535 * 64);
 let maxParticleRadius = 0.01 * 2;
 let minParticleRadius = 0.01 / 1.902 * 2;
 let potentialCutoff = 5;
@@ -15,8 +15,8 @@ let simWidth = 2; // -1.0 to 1.0, not currently adjustable
 let initialMaximumTimeStep = 0.001;
 let initialInverseTimestep = 65536;
 let timeStepCaution = 100;
-let gravity = 1.0;
-let initialTemperature = 1.0;
+let gravity = 0.1;
+let initialTemperature = 0.0;
 
 // determined by shader code
 let bytesPerParticle = 32;
@@ -122,7 +122,7 @@ async function main() {
 		let x = ((i % (sqrt * 2)) / sqrt * 2 - 1 + 1 / sqrt) * (1 - maxParticleRadius);
 		let y = (Math.floor(i / (sqrt * 2)) / sqrt * 2 - 1 + 1 / sqrt) * (1 - maxParticleRadius);
 		let cbrtPhi = Math.cbrt(1/2 + Math.sqrt(5)/2);
-		let radius = semiRandom() < 1 / (1 + cbrtPhi)? maxParticleRadius : minParticleRadius;//maxParticleRadius / (1 + Math.acos(1 - 2 * Math.random()) / Math.PI * (maxParticleRadius / minParticleRadius - 1));
+		let radius = maxParticleRadius;
 
 		workBuffer[floatsPerParticle * i + 0] = x / 2 - 0.5;
 		workBuffer[floatsPerParticle * i + 1] = y / 2 - 0.5;
@@ -225,7 +225,7 @@ async function main() {
 	device.queue.writeBuffer(miscBuffer1, 0, misc);
 
 	let computeBindGroup1 = device.createBindGroup({
-		label: "compute bind group",
+		label: "compute bind group 1",
 		layout: computePipeline.getBindGroupLayout(0),
 		entries: [{
 			binding: 0,
@@ -272,7 +272,7 @@ async function main() {
 
 	// some buffers are swapped
 	let computeBindGroup2 = device.createBindGroup({
-		label: "compute bind group",
+		label: "compute bind group 2",
 		layout: computePipeline.getBindGroupLayout(0),
 		entries: [{
 			binding: 0,
@@ -329,7 +329,7 @@ async function main() {
 	});
 
 	let renderPassDescriptor = {
-		label: "render pass",
+		label: "render pass descriptor",
 		colorAttachments: [{
 			view: undefined, // assigned at render time
 			clearValue: [0.0, 0.0, 0.0, 1.0],
@@ -349,7 +349,7 @@ let x = 0;
 			encoder.clearBuffer(gridCountersBuffer2);
 			encoder.clearBuffer(miscBuffer2);
 
-			pass = encoder.beginComputePass({label: "compute pass"});
+			pass = encoder.beginComputePass({label: "compute pass 1"});
 			pass.setPipeline(computePipeline);
 			pass.setBindGroup(0, computeBindGroup1);
 			pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
@@ -358,7 +358,7 @@ let x = 0;
 			encoder.clearBuffer(gridCountersBuffer1);
 			encoder.clearBuffer(miscBuffer1);
 
-			pass = encoder.beginComputePass({label: "compute pass"});
+			pass = encoder.beginComputePass({label: "compute pass 2"});
 			pass.setPipeline(computePipeline);
 			pass.setBindGroup(0, computeBindGroup2);
 			pass.dispatchWorkgroups(Math.ceil(numParticles / 64));

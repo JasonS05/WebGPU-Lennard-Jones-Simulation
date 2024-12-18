@@ -25,22 +25,22 @@ const minParticleRadius: f32 = [[minParticleRadius]];
 const potentialCutoff: f32 = [[potentialCutoff]];
 const timeStepCaution: f32 = [[timeStepCaution]];
 const gravity: f32 = [[gravity]];
-const gridCellsPerDimension: u32 = [[gridCellsPerDimension]];
+const gridCellsPerDimension: i32 = [[gridCellsPerDimension]];
 const gridCellSize: f32 = [[gridCellSize]];
-const gridCellCapacity: u32 = [[gridCellCapacity]];
-const numGridCells: u32 = [[numGridCells]];
+const gridCellCapacity: i32 = [[gridCellCapacity]];
+const numGridCells: i32 = [[numGridCells]];
 
 const pi = 3.1415926;
-const particleSizeAdjustment = 1 / pow(2, 1/6) * 2;
+const particleSizeAdjustment = 1 / pow(2.0, 1.0/6.0) * 2; // explicit .0 to make Firefox Nightly happy
 
 @group(0) @binding(0) var<storage, read> input_data: array<Particle>;
 @group(0) @binding(1) var<storage, read> input_grid: array<Particle>;
-@group(0) @binding(2) var<storage, read> input_gridCounters: array<u32>;
+@group(0) @binding(2) var<storage, read> input_gridCounters: array<i32>;
 @group(0) @binding(3) var<storage, read_write> input_misc: miscData; // read_write for atomic access, no writing is actually done
 
 @group(0) @binding(4) var<storage, read_write> output_data: array<Particle>;
 @group(0) @binding(5) var<storage, read_write> output_grid: array<Particle>;
-@group(0) @binding(6) var<storage, read_write> output_gridCounters: array<atomic<u32>>;
+@group(0) @binding(6) var<storage, read_write> output_gridCounters: array<atomic<i32>>;
 @group(0) @binding(7) var<storage, read_write> output_misc: miscData;
 
 @compute @workgroup_size(64) fn computeShader(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -60,12 +60,12 @@ const particleSizeAdjustment = 1 / pow(2, 1/6) * 2;
 	var acceleration = result.force / mass + vec2f(0, -gravity);
 
 	//if (input_misc.time < 10.0) {
-		acceleration -= particle.velocity * min(1000, exp(input_misc.time / 100) / 100);
+	//	acceleration -= particle.velocity * min(1000.0, exp(input_misc.time / 100) / 100); // explicit .0 to make Firefox Nightly happy
 	//}
 
-	if (input_misc.time < 0.00) {
-		acceleration -= particle.velocity * 100;
-	}
+	//if (input_misc.time < 0.00) {
+	//	acceleration -= particle.velocity * 0.1;
+	//}
 
 	particle.velocity += (acceleration + particle.acceleration) / 2 * timeStep;
 	particle.position += particle.velocity * timeStep + acceleration * timeStep * timeStep / 2;
@@ -76,12 +76,12 @@ const particleSizeAdjustment = 1 / pow(2, 1/6) * 2;
 
 	if (particle.position.x > 2 - particle.radius * 2) {
 		particle.position.x = 4 - particle.radius * 4 - particle.position.x;
-		particle.velocity.x *= -1;
+		particle.velocity.x *= -1.0; // explicit .0 to make Firefox Nightly happy
 	}
 
 	if (particle.position.y > 2 - particle.radius * 2) {
 		particle.position.y = 4 - particle.radius * 4 - particle.position.y;
-		particle.velocity.y *= -1;
+		particle.velocity.y *= -1.0; // explicit .0 to make Firefox Nightly happy
 	}
 
 	particle.position -= 1 - particle.radius;
@@ -107,7 +107,7 @@ fn placeParticleInGrid(particle: Particle) {
 	let gridCellNumberCandidate = gridCellPosition.x + gridCellPosition.y * i32(gridCellsPerDimension);
 
 	if (gridCellNumberCandidate >= 0 && gridCellNumberCandidate < i32(numGridCells)) {
-		let gridCellNumber = u32(gridCellNumberCandidate);
+		let gridCellNumber = gridCellNumberCandidate;
 		let gridCellOffset = gridCellNumber * gridCellCapacity;
 		let gridCellOccupancy = atomicAdd(&output_gridCounters[gridCellNumber], 1);
 
@@ -138,11 +138,11 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> f
 	for (var y = gridCellPosition.y - 1; y < gridCellPosition.y + 2; y++) {
 		for (var x = gridCellPosition.x - 1; x < gridCellPosition.x + 2; x++) {
 			if (x >= 0 && y >= 0 && x < i32(gridCellsPerDimension) && y < i32(gridCellsPerDimension)) {
-				let gridCellNumber = u32(x) + u32(y) * gridCellsPerDimension;
+				let gridCellNumber = x + y * gridCellsPerDimension;
 				let gridCellOffset = gridCellNumber * gridCellCapacity;
 				let gridCellOccupancy = min(input_gridCounters[gridCellNumber], gridCellCapacity);
 
-				for (var i: u32 = gridCellOffset; i < gridCellOffset + gridCellOccupancy; i++) {
+				for (var i = gridCellOffset; i < gridCellOffset + gridCellOccupancy; i++) {
 					let otherParticle = input_grid[i];
 
 					if (!equal(otherParticle.position, particle.position)) {
@@ -160,7 +160,7 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> f
 	let gridCellOverflowOffset = numGridCells * gridCellCapacity;
 	let gridCellOverflowOccupancy = input_gridCounters[numGridCells];
 
-	for (var i: u32 = gridCellOverflowOffset; i < gridCellOverflowOffset + gridCellOverflowOccupancy; i++) {
+	for (var i = gridCellOverflowOffset; i < gridCellOverflowOffset + gridCellOverflowOccupancy; i++) {
 		let otherParticle = input_grid[i];
 
 		if (!equal(otherParticle.position, particle.position)) {
@@ -181,19 +181,24 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> f
 
 fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -> forceAndPotential {
 	var different: f32 = 0;
-	if (particle1.radius != particle2.radius) { different = 1; }
+
+	if (particle1.radius != particle2.radius) {
+		different = 1.0; // explicit .0 to make Firefox Nightly happy
+	}
 
 	let relativePosition = particle2.position - particle1.position;
 	let distance2 = dot(relativePosition, relativePosition);
 	var summedRadii = (particle1.radius + particle2.radius);
 
-	if (different == 1) { summedRadii = minParticleRadius * 2 * 1.618; }
+	if (different == 1) {
+		summedRadii = minParticleRadius * 2 * 1.618;
+	}
 
 	let particleSize = summedRadii * particleSizeAdjustment * 0.5;
 
 	if (distance2 < summedRadii * summedRadii * potentialCutoff * potentialCutoff) {
 		let cutoffDistanceRadii = potentialCutoff * particleSizeAdjustment;
-		let potentialAtCutoff = pow(cutoffDistanceRadii, -12) - pow(cutoffDistanceRadii, -6);
+		let potentialAtCutoff = pow(cutoffDistanceRadii, -12.0) - pow(cutoffDistanceRadii, -6.0); // explicit .0 to make Firefox Nightly happy
 
 		let iparticleSize = 1 / particleSize;
 		let iparticleSize2 = iparticleSize * iparticleSize;
@@ -209,8 +214,8 @@ fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -
 		result.nearestNeighborDist = distance2;
 
 		if (different == 0) {
-			result.force /= 4;
-			result.potential /= 4;
+			result.force /= 4.0; // explicit .0 to make Firefox Nightly happy
+			result.potential /= 4.0; // explicit .0 to make Firefox Nightly happy
 		}
 
 		return result;
@@ -227,7 +232,7 @@ struct VertexShaderOutput {
 @vertex fn vertexShader(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexShaderOutput {
 	let particle = input_data[instanceIndex];
 
-	let radius = particle.radius;
+	let radius = particle.radius * 0.9;
 
 	var vertexPosition: vec2f;
 
@@ -253,7 +258,7 @@ struct VertexShaderOutput {
 	let potentialEnergy = particle.potential / 2;
 	let velocity = particle.velocity;
 	let kineticEnergy = 0.5 * dot(velocity, velocity);
-	var color = 5 * potentialEnergy + 0 * kineticEnergy + 2.5;
+	var color = 8 * (potentialEnergy + kineticEnergy);
 
 	if (color < 0) {
 		vsOutput.color = mix(white, blue, -color);
@@ -261,11 +266,13 @@ struct VertexShaderOutput {
 		vsOutput.color = mix(white, red, color);
 	}
 
-	if (radius == maxParticleRadius) {
+	/*if (radius == maxParticleRadius) {
 		vsOutput.color = vec4f(1, 1, 0, 1);
 	} else {
 		vsOutput.color = vec4f(0, 0, 1, 1);
-	}
+	}*/
+
+	vsOutput.color = vec4f(1, 1, 1, 1);
 
 	return vsOutput;
 }
