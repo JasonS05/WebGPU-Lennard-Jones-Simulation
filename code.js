@@ -7,20 +7,20 @@
 // etc.
 let circleResolution = 3;
 
-let numParticles = 7000; // must not be higher than 4194240 (i.e. 65535 * 64);
-let maxParticleRadius = 0.01;
-let minParticleRadius = 0.005;
-let potentialCutoff = 2.5;
+let numParticles = Math.round(5800 / 4); // must not be higher than 4194240 (i.e. 65535 * 64);
+let maxParticleRadius = 0.01 * 2;
+let minParticleRadius = 0.01 / 1.902 * 2;
+let potentialCutoff = 5;
 let simWidth = 2; // -1.0 to 1.0, not currently adjustable
-let initialMaximumTimeStep = 0.0003;
+let initialMaximumTimeStep = 0.001;
 let initialInverseTimestep = 65536;
 let timeStepCaution = 100;
 let gravity = 1.0;
-let initialTemperature = 0.0;
+let initialTemperature = 1.0;
 
 // determined by shader code
 let bytesPerParticle = 32;
-let miscBufferLength = 16;
+let miscBufferLength = 20;
 
 let gridCellsPerDimension = Math.floor(simWidth / (maxParticleRadius * 2 * potentialCutoff));
 let gridCellSize = 1 / gridCellsPerDimension;
@@ -29,6 +29,13 @@ let numGridCells = gridCellsPerDimension ** 2;
 let gridBufferSize = numParticles + numGridCells * gridCellCapacity + 1;
 
 let errorHasOccured = false;
+
+let semiRandomState = 0;
+function semiRandom() {
+	let phi = (1 + Math.sqrt(5)) / 2;
+	semiRandomState = (semiRandomState + phi) % 1;
+	return semiRandomState;
+}
 
 function reportError(error) {
 	errorHasOccured = true; // stop the main loop
@@ -114,10 +121,11 @@ async function main() {
 		let sqrt = Math.ceil(Math.sqrt(numParticles / 2));
 		let x = ((i % (sqrt * 2)) / sqrt * 2 - 1 + 1 / sqrt) * (1 - maxParticleRadius);
 		let y = (Math.floor(i / (sqrt * 2)) / sqrt * 2 - 1 + 1 / sqrt) * (1 - maxParticleRadius);
-		let radius = maxParticleRadius / (1 + Math.acos(1 - 2 * Math.random()) / Math.PI * (maxParticleRadius / minParticleRadius - 1));
+		let cbrtPhi = Math.cbrt(1/2 + Math.sqrt(5)/2);
+		let radius = semiRandom() < 1 / (1 + cbrtPhi)? maxParticleRadius : minParticleRadius;//maxParticleRadius / (1 + Math.acos(1 - 2 * Math.random()) / Math.PI * (maxParticleRadius / minParticleRadius - 1));
 
-		workBuffer[floatsPerParticle * i + 0] = y / 2 - 0.5;
-		workBuffer[floatsPerParticle * i + 1] = x / 2 - 0.5;
+		workBuffer[floatsPerParticle * i + 0] = x / 2 - 0.5;
+		workBuffer[floatsPerParticle * i + 1] = y / 2 - 0.5;
 		workBuffer[floatsPerParticle * i + 2] = Math.sqrt(initialTemperature) * (Math.random() * 2 - 1);
 		workBuffer[floatsPerParticle * i + 3] = Math.sqrt(initialTemperature) * (Math.random() * 2 - 1);
 		// 4: acceleration.x: f32
@@ -329,7 +337,7 @@ async function main() {
 			storeOp: "store"
 		}]
 	};
-
+let x = 0;
 	function compute(iterations) {
 		if (errorHasOccured) return;
 

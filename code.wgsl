@@ -14,7 +14,8 @@ struct miscData {
 	maximumTimeStep: f32,
 	inverseTimeStep: atomic<u32>,
 	nextMaximumTimeStep: f32,
-	time: f32
+	time: f32,
+	oldTimeStep: f32
 }
 
 // values with [[...]] are supplied by JS using textual substitution
@@ -50,15 +51,20 @@ const particleSizeAdjustment = 1 / pow(2, 1/6) * 2;
 		return;
 	}
 
-	let timeStep = input_misc.maximumTimeStep / f32(atomicLoad(&input_misc.inverseTimeStep));
+	let suggestedTimeStep = input_misc.maximumTimeStep / f32(atomicLoad(&input_misc.inverseTimeStep));
+	let timeStep = min(input_misc.oldTimeStep * 0.999 + suggestedTimeStep * 0.001, suggestedTimeStep * 2);
 
 	var particle = input_data[index];
 	let mass = 1000 * particle.radius * particle.radius;
 	let result = calculateForceAndPotential(particle, timeStep, mass);
 	var acceleration = result.force / mass + vec2f(0, -gravity);
 
-	if (input_misc.time < 0.15) {
-		acceleration -= particle.velocity * 10;
+	//if (input_misc.time < 10.0) {
+		acceleration -= particle.velocity * min(1000, exp(input_misc.time / 100) / 100);
+	//}
+
+	if (input_misc.time < 0.00) {
+		acceleration -= particle.velocity * 100;
 	}
 
 	particle.velocity += (acceleration + particle.acceleration) / 2 * timeStep;
@@ -83,12 +89,13 @@ const particleSizeAdjustment = 1 / pow(2, 1/6) * 2;
 	output_data[index] = particle;
 	placeParticleInGrid(particle);
 
-	let minimumInverseTimeStep = u32(1 + floor(timeStepCaution * input_misc.nextMaximumTimeStep * length(particle.velocity) / minParticleRadius));
+	let minimumInverseTimeStep = u32(1 + floor(timeStepCaution * input_misc.nextMaximumTimeStep * length(particle.velocity) / result.nearestNeighborDist * 2));
 
 	output_misc.maximumTimeStep = input_misc.nextMaximumTimeStep;
 	atomicMax(&output_misc.inverseTimeStep, minimumInverseTimeStep);
 	output_misc.nextMaximumTimeStep = timeStep * 65536;
 	output_misc.time = input_misc.time + timeStep;
+	output_misc.oldTimeStep = timeStep;
 }
 
 fn modulo(dividend: vec2f, divisor: f32) -> vec2f {
@@ -116,13 +123,15 @@ fn placeParticleInGrid(particle: Particle) {
 
 struct forceAndPotential {
 	force: vec2f,
-	potential: f32
+	potential: f32,
+	nearestNeighborDist: f32
 }
 
 fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> forceAndPotential {
 	let position = particle.position;
 	var force = vec2f(0, 0);
 	var potential: f32 = 0;
+	var nearestNeighborDist = maxParticleRadius * maxParticleRadius * potentialCutoff * potentialCutoff * 4;
 
 	let gridCellPosition = vec2i(floor((particle.position + 1) / 2 / gridCellSize));
 
@@ -141,6 +150,7 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> f
 
 						force += result.force;
 						potential += result.potential;
+						nearestNeighborDist = min(nearestNeighborDist, result.nearestNeighborDist);
 					}
 				}
 			}
@@ -158,19 +168,27 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> f
 
 			force += result.force;
 			potential += result.potential;
+			nearestNeighborDist = min(nearestNeighborDist, result.nearestNeighborDist);
 		}
 	}
 
 	var result: forceAndPotential;
 	result.force = force;
 	result.potential = potential;
+	result.nearestNeighborDist = sqrt(nearestNeighborDist);
 	return result;
 }
 
 fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -> forceAndPotential {
+	var different: f32 = 0;
+	if (particle1.radius != particle2.radius) { different = 1; }
+
 	let relativePosition = particle2.position - particle1.position;
 	let distance2 = dot(relativePosition, relativePosition);
-	let summedRadii = particle1.radius + particle2.radius;
+	var summedRadii = (particle1.radius + particle2.radius);
+
+	if (different == 1) { summedRadii = minParticleRadius * 2 * 1.618; }
+
 	let particleSize = summedRadii * particleSizeAdjustment * 0.5;
 
 	if (distance2 < summedRadii * summedRadii * potentialCutoff * potentialCutoff) {
@@ -188,9 +206,16 @@ fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -
 		var result: forceAndPotential;
 		result.force = (iradii6 * 6 - iradii12 * 12) * iradii2 * iparticleSize2 * relativePosition;
 		result.potential = iradii12 - iradii6 - potentialAtCutoff;
+		result.nearestNeighborDist = distance2;
+
+		if (different == 0) {
+			result.force /= 4;
+			result.potential /= 4;
+		}
+
 		return result;
 	} else {
-		return forceAndPotential(vec2f(0, 0), 0);
+		return forceAndPotential(vec2f(0, 0), 0, maxParticleRadius * maxParticleRadius * potentialCutoff * potentialCutoff * 4);
 	}
 }
 
@@ -234,6 +259,12 @@ struct VertexShaderOutput {
 		vsOutput.color = mix(white, blue, -color);
 	} else {
 		vsOutput.color = mix(white, red, color);
+	}
+
+	if (radius == maxParticleRadius) {
+		vsOutput.color = vec4f(1, 1, 0, 1);
+	} else {
+		vsOutput.color = vec4f(0, 0, 1, 1);
 	}
 
 	return vsOutput;
