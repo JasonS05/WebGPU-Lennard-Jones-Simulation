@@ -7,22 +7,22 @@
 // etc.
 let circleResolution = 3;
 
-let numParticles = Math.round(1000); // must not be higher than 4194240 (i.e. 65535 * 64);
-let maxParticleRadius = 0.01 * 2;
-let minParticleRadius = 0.01 / 1.902 * 2;
-let potentialCutoff = 5;
-let simWidth = 2; // -1.0 to 1.0, not currently adjustable
+let numParticles = Math.round(2680); // must not be higher than 4194240 (i.e. 65535 * 64);
+let maxParticleRadius = 0.02;
+let minParticleRadius = maxParticleRadius;
+let potentialCutoff = 2.5;
+let simSize = 1.4;
 let initialMaximumTimeStep = 0.001;
 let initialInverseTimestep = 65536;
 let timeStepCaution = 100;
-let gravity = 0.1;
-let initialTemperature = 0.0;
+let gravity = 1;
+let initialTemperature = 1;
 
 // determined by shader code
-let bytesPerParticle = 32;
+let bytesPerParticle = 40; // 8 byte aligned, apparently
 let miscBufferLength = 20;
 
-let gridCellsPerDimension = Math.floor(simWidth / (maxParticleRadius * 2 * potentialCutoff));
+let gridCellsPerDimension = Math.floor(1 / (maxParticleRadius * potentialCutoff));
 let gridCellSize = 1 / gridCellsPerDimension;
 let gridCellCapacity = Math.ceil(2 * (gridCellSize / minParticleRadius + 1) ** 2);
 let numGridCells = gridCellsPerDimension ** 2;
@@ -118,20 +118,27 @@ async function main() {
 	let workBuffer = new Float32Array(numParticles * bytesPerParticle);
 
 	for (let i = 0; i < numParticles; i++) {
-		let sqrt = Math.ceil(Math.sqrt(numParticles / 2));
-		let x = ((i % (sqrt * 2)) / sqrt * 2 - 1 + 1 / sqrt) * (1 - maxParticleRadius);
-		let y = (Math.floor(i / (sqrt * 2)) / sqrt * 2 - 1 + 1 / sqrt) * (1 - maxParticleRadius);
-		let cbrtPhi = Math.cbrt(1/2 + Math.sqrt(5)/2);
+		let sqrt1 = Math.round(Math.sqrt(numParticles / Math.sqrt(0.75)));
+		let sqrt2 = Math.round(Math.sqrt(numParticles * Math.sqrt(0.75)));
+		let x = ((i % sqrt1) / sqrt1 - 0.5) * (1 - 2 * maxParticleRadius) * 2 + 1 * maxParticleRadius;
+		let y = (Math.floor(i / sqrt1) / sqrt2 - 0.5) * (1 - 2 * maxParticleRadius) * 2 - 0.5 * maxParticleRadius;
+		let vx = Math.sqrt(initialTemperature) * (Math.random() * 2 - 1);
+		let vy = Math.sqrt(initialTemperature) * (Math.random() * 2 - 1);
 		let radius = maxParticleRadius;
 
-		workBuffer[floatsPerParticle * i + 0] = x / 2 - 0.5;
-		workBuffer[floatsPerParticle * i + 1] = y / 2 - 0.5;
-		workBuffer[floatsPerParticle * i + 2] = Math.sqrt(initialTemperature) * (Math.random() * 2 - 1);
-		workBuffer[floatsPerParticle * i + 3] = Math.sqrt(initialTemperature) * (Math.random() * 2 - 1);
+		if (i % sqrt1 % 2 == 1) {
+			y += 1 / sqrt2 * (1 - 2 * maxParticleRadius);
+		}
+
+		workBuffer[floatsPerParticle * i + 0] = x / simSize;
+		workBuffer[floatsPerParticle * i + 1] = y / simSize;
+		workBuffer[floatsPerParticle * i + 2] = vx * simSize;
+		workBuffer[floatsPerParticle * i + 3] = vy * simSize;
 		// 4: acceleration.x: f32
 		// 5: acceleration.y: f32
 		// 6: potential: f32
-		workBuffer[floatsPerParticle * i + 7] = radius;
+		workBuffer[floatsPerParticle * i + 7] = radius / simSize;
+		// 8: coordinationNumber: f32
 	}
 
 	let grid = new Float32Array(gridBufferSize * bytesPerParticle);

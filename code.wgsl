@@ -3,7 +3,8 @@ struct Particle {
 	velocity: vec2f,
 	acceleration: vec2f,
 	potential: f32,
-	radius: f32
+	radius: f32,
+	coordinationNumber: f32
 }
 
 fn equal(a: vec2f, b: vec2f) -> bool {
@@ -56,7 +57,7 @@ const particleSizeAdjustment = 1 / pow(2.0, 1.0/6.0) * 2; // explicit .0 to make
 
 	var particle = input_data[index];
 	let mass = 1000 * particle.radius * particle.radius;
-	let result = calculateForceAndPotential(particle, timeStep, mass);
+	let result = calculateParticleData(particle, timeStep, mass);
 	var acceleration = result.force / mass + vec2f(0, -gravity);
 
 	//if (input_misc.time < 10.0) {
@@ -64,13 +65,14 @@ const particleSizeAdjustment = 1 / pow(2.0, 1.0/6.0) * 2; // explicit .0 to make
 	//}
 
 	//if (input_misc.time < 0.00) {
-	//	acceleration -= particle.velocity * 0.1;
+		acceleration -= particle.velocity * 0.1;
 	//}
 
 	particle.velocity += (acceleration + particle.acceleration) / 2 * timeStep;
 	particle.position += particle.velocity * timeStep + acceleration * timeStep * timeStep / 2;
 	particle.acceleration = acceleration;
 	particle.potential = result.potential;
+	particle.coordinationNumber = result.coordinationNumber;
 
 	particle.position = modulo(particle.position + 1 - particle.radius, 4 - particle.radius * 4);
 
@@ -121,17 +123,19 @@ fn placeParticleInGrid(particle: Particle) {
 	}
 }
 
-struct forceAndPotential {
+struct particleData {
 	force: vec2f,
 	potential: f32,
-	nearestNeighborDist: f32
+	nearestNeighborDist: f32,
+	coordinationNumber: f32
 }
 
-fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> forceAndPotential {
+fn calculateParticleData(particle: Particle, timeStep: f32, mass: f32) -> particleData {
 	let position = particle.position;
 	var force = vec2f(0, 0);
 	var potential: f32 = 0;
 	var nearestNeighborDist = maxParticleRadius * maxParticleRadius * potentialCutoff * potentialCutoff * 4;
+	var coordinationNumber: f32 = 0;
 
 	let gridCellPosition = vec2i(floor((particle.position + 1) / 2 / gridCellSize));
 
@@ -146,11 +150,12 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> f
 					let otherParticle = input_grid[i];
 
 					if (!equal(otherParticle.position, particle.position)) {
-						let result = calculateForceAndPotential_helper(particle, otherParticle);
+						let result = calculateParticleData_helper(particle, otherParticle);
 
 						force += result.force;
 						potential += result.potential;
 						nearestNeighborDist = min(nearestNeighborDist, result.nearestNeighborDist);
+						coordinationNumber += result.coordinationNumber;
 					}
 				}
 			}
@@ -164,22 +169,24 @@ fn calculateForceAndPotential(particle: Particle, timeStep: f32, mass: f32) -> f
 		let otherParticle = input_grid[i];
 
 		if (!equal(otherParticle.position, particle.position)) {
-			let result = calculateForceAndPotential_helper(particle, otherParticle);
+			let result = calculateParticleData_helper(particle, otherParticle);
 
 			force += result.force;
 			potential += result.potential;
 			nearestNeighborDist = min(nearestNeighborDist, result.nearestNeighborDist);
+			coordinationNumber += result.coordinationNumber;
 		}
 	}
 
-	var result: forceAndPotential;
+	var result: particleData;
 	result.force = force;
 	result.potential = potential;
 	result.nearestNeighborDist = sqrt(nearestNeighborDist);
+	result.coordinationNumber = coordinationNumber;
 	return result;
 }
 
-fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -> forceAndPotential {
+fn calculateParticleData_helper(particle1: Particle, particle2: Particle) -> particleData {
 	var different: f32 = 0;
 
 	if (particle1.radius != particle2.radius) {
@@ -208,10 +215,15 @@ fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -
 		let iradii6 = iradii4 * iradii2;
 		let iradii12 = iradii6 * iradii6;
 
-		var result: forceAndPotential;
+		var result: particleData;
 		result.force = (iradii6 * 6 - iradii12 * 12) * iradii2 * iparticleSize2 * relativePosition;
 		result.potential = iradii12 - iradii6 - potentialAtCutoff;
 		result.nearestNeighborDist = distance2;
+		result.coordinationNumber = 0.0;
+
+		if (distance2 < summedRadii * summedRadii * 2.1) {
+			result.coordinationNumber = 1.0;
+		}
 
 		if (different == 0) {
 			result.force /= 4.0; // explicit .0 to make Firefox Nightly happy
@@ -220,7 +232,7 @@ fn calculateForceAndPotential_helper(particle1: Particle, particle2: Particle) -
 
 		return result;
 	} else {
-		return forceAndPotential(vec2f(0, 0), 0, maxParticleRadius * maxParticleRadius * potentialCutoff * potentialCutoff * 4);
+		return particleData(vec2f(0, 0), 0, maxParticleRadius * maxParticleRadius * potentialCutoff * potentialCutoff * 4, 0);
 	}
 }
 
@@ -258,13 +270,14 @@ struct VertexShaderOutput {
 	let potentialEnergy = particle.potential / 2;
 	let velocity = particle.velocity;
 	let kineticEnergy = 0.5 * dot(velocity, velocity);
+	let coordinationNumber = particle.coordinationNumber;
 	var color = 8 * (potentialEnergy + kineticEnergy);
 
-	if (color < 0) {
+	/*if (color < 0) {
 		vsOutput.color = mix(white, blue, -color);
 	} else {
 		vsOutput.color = mix(white, red, color);
-	}
+	}*/
 
 	/*if (radius == maxParticleRadius) {
 		vsOutput.color = vec4f(1, 1, 0, 1);
@@ -272,7 +285,15 @@ struct VertexShaderOutput {
 		vsOutput.color = vec4f(0, 0, 1, 1);
 	}*/
 
-	vsOutput.color = vec4f(1, 1, 1, 1);
+	if (particle.coordinationNumber < 6) {
+		vsOutput.color = vec4f(0.5, 0.5, 1, 1);
+	} else if (particle.coordinationNumber == 6) {
+		vsOutput.color = vec4f(0.5, 1, 0.5, 1);
+	} else {
+		vsOutput.color = vec4f(1, 0.5, 0.5, 1);
+	}
+
+	//vsOutput.color = vec4f(1, 1, 1, 1);
 
 	return vsOutput;
 }
