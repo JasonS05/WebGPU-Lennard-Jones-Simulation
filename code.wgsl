@@ -216,10 +216,19 @@ fn calculateParticleData_helper(particle1: Particle, particle2: Particle) -> par
 		let iradii12 = iradii6 * iradii6;
 
 		var result: particleData;
-		result.force = (iradii6 * 6 - iradii12 * 12) * iradii2 * iparticleSize2 * relativePosition;
-		result.potential = iradii12 - iradii6 - potentialAtCutoff;
 		result.nearestNeighborDist = distance2;
 		result.coordinationNumber = 0.0;
+
+		// Lennard-Jones potential
+		result.force = (iradii6 * 6 - iradii12 * 12) * iradii2 * iparticleSize2 * relativePosition;
+		result.potential = iradii12 - iradii6 - potentialAtCutoff;
+
+		// Morse potential
+		/*let width: f32 = 0.167;
+		let distance = sqrt(distance2) * 1;
+		let exponential = exp((1 - distance / summedRadii) / width);
+		result.force = 2 * (1 - exponential) * exponential / (width * summedRadii) * relativePosition / distance;
+		result.potential = (1 - exponential) * (1 - exponential) - 1; // missing the cutoff distance adjustment*/
 
 		if (distance2 < summedRadii * summedRadii * 2.1) {
 			result.coordinationNumber = 1.0;
